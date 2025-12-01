@@ -10,6 +10,7 @@ from ctypes import wintypes
 
 from keyboard_handler import KeyboardHandler
 from shortcut_manager import init_base_folder, open_folder, launch_shortcut
+from system_tray import SystemTray
 from config import BASE_PATH
 
 
@@ -85,11 +86,13 @@ def show_notification(title: str, message: str):
 
 class PowerKey:
     """PowerKey 主程序类"""
-    
+
     def __init__(self):
         self.keyboard_handler = KeyboardHandler()
+        self.system_tray = SystemTray(on_exit=self._on_exit)
+        self._running = True
         self._setup_callbacks()
-    
+
     def _setup_callbacks(self):
         """设置键盘事件回调"""
         self.keyboard_handler.set_callbacks(
@@ -97,6 +100,13 @@ class PowerKey:
             on_launch_shortcut=self._on_launch_shortcut,
             on_game_mode_toggle=self._on_game_mode_toggle
         )
+
+    def _on_exit(self):
+        """退出程序回调"""
+        self._running = False
+        print("\n正在退出程序...")
+        self.keyboard_handler.stop()
+        sys.exit(0)
     
     def _on_open_folder(self, f_key: str):
         """
@@ -145,31 +155,38 @@ class PowerKey:
         print("使用方法:")
         print("  Fx + Enter    - 打开对应文件夹")
         print("  Fx + 字母/数字 - 启动对应快捷方式")
-        print("  双击 Fx       - 执行原有功能键效果")
         print("  Win + Esc     - 切换游戏模式")
         print()
-        print("注意: 单次按下 Fx 会被阻拦，Fn+Fx 组合不受影响")
+        print("常用功能键直接放行（F2重命名、F5刷新、F11全屏、F12控制台）")
+        print("不常用功能键会被拦截用于启动快捷方式（F1/F3/F4/F6-F10）")
+        print("注意: Fn+Fx 组合键不受影响")
         print()
-        print("按 Ctrl+C 退出程序")
+        print("右键点击系统托盘图标可以退出程序或设置开机自启动")
+        print("按 Ctrl+C 也可以退出程序")
         print("=" * 50)
-        
+
         # 初始化基础文件夹
         init_base_folder()
-        
+
         # 启动键盘监听
         self.keyboard_handler.start()
-        
+
+        # 启动系统托盘
+        self.system_tray.start()
+
         # 显示启动通知
         show_notification("PowerKey", "程序已启动，按 Win+Esc 切换游戏模式")
-        
+
         try:
             # 保持程序运行
-            import keyboard
-            keyboard.wait()
+            import time
+            while self._running:
+                time.sleep(0.1)
         except KeyboardInterrupt:
             print("\n程序已退出")
         finally:
             self.keyboard_handler.stop()
+            self.system_tray.stop()
 
 
 def main():

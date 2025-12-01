@@ -21,6 +21,13 @@ NUMBER_KEYS = set('0123456789')
 # 所有支持的快捷方式触发键
 TRIGGER_KEYS = LETTER_KEYS | NUMBER_KEYS
 
+# 常用功能键（直接放行，不拦截）
+# F2: 重命名
+# F5: 刷新
+# F11: 全屏
+# F12: 开发者工具/控制台
+COMMON_F_KEYS = {'f2', 'f5', 'f11', 'f12'}
+
 # 游戏模式切换热键
 GAME_MODE_HOTKEY = 'win+esc'
 
