@@ -4,6 +4,17 @@ echo ========================================
 echo PowerKey 打包脚本
 echo ========================================
 
+REM 检查并关闭正在运行的 PowerKey.exe
+tasklist /FI "IMAGENAME eq PowerKey.exe" 2>NUL | find /I /N "PowerKey.exe">NUL
+if "%ERRORLEVEL%"=="0" (
+    echo.
+    echo [警告] 检测到 PowerKey.exe 正在运行
+    echo 正在尝试关闭程序...
+    taskkill /F /IM PowerKey.exe >NUL 2>&1
+    timeout /t 2 /nobreak >NUL
+    echo 程序已关闭
+)
+
 echo.
 echo 正在安装依赖...
 pip install -r requirements.txt
@@ -21,6 +32,7 @@ pyinstaller ^
   --noconsole ^
   --name PowerKey ^
   --icon="%ICON_PATH%" ^
+  --add-data "%ICON_PATH%;." ^
   --distpath . ^
   --workpath build ^
   --specpath build ^

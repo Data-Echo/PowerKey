@@ -17,20 +17,42 @@ def create_icon_image():
     """创建托盘图标图像"""
     # 尝试加载自定义图标
     icon_path = os.path.join(os.path.dirname(__file__), 'icons.ico')
+
+    # 如果是打包后的程序，图标路径需要调整
+    if getattr(sys, 'frozen', False):
+        # 打包后的程序，从 _MEIPASS 目录加载
+        base_path = sys._MEIPASS
+        icon_path = os.path.join(base_path, 'icons.ico')
+
     if os.path.exists(icon_path):
         try:
-            return Image.open(icon_path)
-        except Exception:
-            pass
+            # 加载 ICO 文件并提取合适的尺寸
+            img = Image.open(icon_path)
+            # ICO 文件包含多个尺寸，选择最合适的（通常是 32x32 或 16x16）
+            # 确保图像是 RGBA 模式
+            if img.mode != 'RGBA':
+                img = img.convert('RGBA')
+            return img
+        except Exception as e:
+            print(f"加载图标失败: {e}")
 
     # 如果没有图标文件，创建一个简单的图标
     width = 64
     height = 64
-    image = Image.new('RGB', (width, height), color='#2196F3')
+    image = Image.new('RGBA', (width, height), (33, 150, 243, 255))  # 蓝色背景
     dc = ImageDraw.Draw(image)
 
-    # 绘制一个 "P" 字母（代表 PowerKey）
-    dc.text((width//4, height//4), "P", fill='white')
+    # 绘制一个 "PK" 字母（代表 PowerKey）
+    # 使用更大的字体
+    from PIL import ImageFont
+    try:
+        # 尝试使用系统字体
+        font = ImageFont.truetype("arial.ttf", 32)
+    except:
+        # 如果没有找到字体，使用默认字体
+        font = ImageFont.load_default()
+
+    dc.text((8, 16), "PK", fill=(255, 255, 255, 255), font=font)
 
     return image
 
@@ -48,6 +70,7 @@ class SystemTray:
         self.on_exit = on_exit
         self.icon = None
         self.running = False
+        self.visible = True  # 托盘是否可见
         self._thread = None
 
     def _create_menu(self):
@@ -59,6 +82,10 @@ class SystemTray:
                 '开机自启动',
                 self._toggle_startup,
                 checked=lambda item: is_startup_enabled()
+            ),
+            pystray.MenuItem(
+                '隐藏托盘',
+                self._hide_tray
             ),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem(
@@ -76,6 +103,12 @@ class SystemTray:
 
         # 更新菜单
         icon.menu = self._create_menu()
+
+    def _hide_tray(self, icon, item):
+        """隐藏托盘图标"""
+        self.visible = False
+        self.stop()
+        print("托盘图标已隐藏，按 Win+F4 可退出程序")
 
     def _on_exit_clicked(self, icon, item):
         """处理退出按钮点击"""

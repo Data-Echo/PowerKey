@@ -37,22 +37,27 @@ class KeyboardHandler:
         self.on_open_folder: Optional[Callable[[str], None]] = None
         self.on_launch_shortcut: Optional[Callable[[str, str], None]] = None
         self.on_game_mode_toggle: Optional[Callable[[bool], None]] = None
+        self.on_exit: Optional[Callable[[], None]] = None  # 退出程序回调
 
         # hook/热键句柄
         self.f_key_handlers: Dict[str, Callable] = {}
         self.shortcut_hotkeys: List[int] = []
         self.toggle_hook = None
+        self.exit_hook = None  # Win+F4 退出 hook
+        self.last_exit_time: float = 0.0  # 防止重复触发
 
     def set_callbacks(
         self,
         on_open_folder: Callable[[str], None],
         on_launch_shortcut: Callable[[str, str], None],
         on_game_mode_toggle: Callable[[bool], None],
+        on_exit: Optional[Callable[[], None]] = None,
     ):
         """设置回调函数"""
         self.on_open_folder = on_open_folder
         self.on_launch_shortcut = on_launch_shortcut
         self.on_game_mode_toggle = on_game_mode_toggle
+        self.on_exit = on_exit
 
     # region 注册/注销
 
@@ -122,6 +127,35 @@ class KeyboardHandler:
         if self.toggle_hook is not None:
             keyboard.unhook(self.toggle_hook)
             self.toggle_hook = None
+
+    def _register_exit_hotkey(self):
+        """注册 Win+F4 退出快捷键（不阻拦 Win 键）"""
+        if self.exit_hook is None:
+            self.exit_hook = keyboard.on_press_key(
+                'f4',
+                self._handle_exit_trigger,
+                suppress=False,
+            )
+
+    def _unregister_exit_hotkey(self):
+        """注销 Win+F4 退出快捷键"""
+        if self.exit_hook is not None:
+            keyboard.unhook(self.exit_hook)
+            self.exit_hook = None
+
+    def _handle_exit_trigger(self, event):
+        """处理退出快捷键触发"""
+        if not self._is_windows_pressed():
+            return
+
+        current = time.time()
+        if current - self.last_exit_time < 0.3:
+            return
+        self.last_exit_time = current
+
+        print("\n检测到 Win+F4，正在退出程序...")
+        if self.on_exit:
+            self.on_exit()
 
     def _handle_game_mode_trigger(self, event):
         """处理游戏模式组合键"""
@@ -207,9 +241,11 @@ class KeyboardHandler:
         self._register_f_key_hooks()
         self._register_shortcut_hotkeys()
         self._register_toggle_hotkey()
+        self._register_exit_hotkey()
 
     def stop(self):
         """停止监听键盘事件"""
+        self._unregister_exit_hotkey()
         self._unregister_toggle_hotkey()
         self._unregister_shortcut_hotkeys()
         self._unregister_f_key_hooks()
