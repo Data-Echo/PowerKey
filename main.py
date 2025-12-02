@@ -24,9 +24,6 @@ NIM_ADD = 0x00000000
 NIM_MODIFY = 0x00000001
 NIM_DELETE = 0x00000002
 
-# 全局变量：用于终止上一个通知进程
-_last_notification_process = None
-
 
 class NOTIFYICONDATA(ctypes.Structure):
     """Windows 通知图标数据结构"""
@@ -49,44 +46,24 @@ class NOTIFYICONDATA(ctypes.Structure):
 
 def show_notification(title: str, message: str):
     """
-    显示 Windows 气泡通知（快速版本，自动覆盖之前的通知）
+    显示 Windows 气泡通知（使用 plyer 库，不会显示 PowerShell 图标）
 
     Args:
         title: 通知标题
         message: 通知内容
     """
-    global _last_notification_process
-
     try:
-        # 终止之前的通知进程
-        if _last_notification_process is not None:
-            try:
-                _last_notification_process.terminate()
-                _last_notification_process.wait(timeout=0.5)
-            except:
-                pass
-
-        # 使用 PowerShell 显示通知，设置较短的显示时间
-        import subprocess
-        ps_script = f'''
-        Add-Type -AssemblyName System.Windows.Forms
-        $notify = New-Object System.Windows.Forms.NotifyIcon
-        $notify.Icon = [System.Drawing.SystemIcons]::Information
-        $notify.Visible = $true
-        $notify.ShowBalloonTip(1000, "{title}", "{message}", [System.Windows.Forms.ToolTipIcon]::Info)
-        Start-Sleep -Milliseconds 1500
-        $notify.Dispose()
-        '''
-
-        _last_notification_process = subprocess.Popen(
-            ['powershell', '-ExecutionPolicy', 'Bypass', '-Command', ps_script],
-            creationflags=subprocess.CREATE_NO_WINDOW,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL
+        # 使用 plyer 库显示通知（更轻量，不会显示额外的任务栏图标）
+        from plyer import notification
+        notification.notify(
+            title=title,
+            message=message,
+            app_name='PowerKey',
+            timeout=2  # 2秒后自动消失
         )
-    except Exception as e:
-        # 通知失败不影响主程序
-        print(f"通知显示失败: {e}")
+    except Exception:
+        # 如果 plyer 不可用，静默失败
+        pass
 
 
 class PowerKey:
@@ -94,7 +71,7 @@ class PowerKey:
 
     def __init__(self):
         self.keyboard_handler = KeyboardHandler()
-        self.system_tray = SystemTray(on_exit=self._on_exit)
+        self.system_tray = SystemTray(on_exit=self._on_exit, on_restart=self._on_restart)
         self._running = True
         self._setup_callbacks()
 
@@ -104,16 +81,59 @@ class PowerKey:
             on_open_folder=self._on_open_folder,
             on_launch_shortcut=self._on_launch_shortcut,
             on_game_mode_toggle=self._on_game_mode_toggle,
-            on_exit=self._on_exit
+            on_exit=self._on_exit,
+            on_toggle_tray=self._on_toggle_tray
         )
+
+    def _on_toggle_tray(self):
+        """切换托盘图标显示/隐藏回调"""
+        # 先记录当前状态
+        was_visible = self.system_tray.visible
+
+        # 切换显示状态
+        self.system_tray.toggle_visibility()
+
+        # 根据切换后的状态显示通知
+        if was_visible:
+            # 之前是显示的，现在隐藏了
+            show_notification("PowerKey", "任务托盘已隐藏")
+        else:
+            # 之前是隐藏的，现在显示了
+            show_notification("PowerKey", "任务托盘已显示")
 
     def _on_exit(self):
         """退出程序回调"""
         self._running = False
-        print("\n正在退出程序...")
+        show_notification("PowerKey", "程序正在退出...")
         self.keyboard_handler.stop()
         sys.exit(0)
-    
+
+    def _on_restart(self):
+        """重启程序回调"""
+        show_notification("PowerKey", "程序正在重启...")
+        self.keyboard_handler.stop()
+        self.system_tray.stop()
+
+        # 获取当前可执行文件路径
+        import os
+        import subprocess
+
+        if getattr(sys, 'frozen', False):
+            # 打包后的可执行文件
+            executable = sys.executable
+        else:
+            # 开发环境，使用 Python 解释器重新运行
+            executable = sys.executable
+            script = os.path.abspath(__file__)
+            # 启动新进程
+            subprocess.Popen([executable, script])
+            sys.exit(0)
+            return
+
+        # 启动新的程序实例
+        subprocess.Popen([executable])
+        sys.exit(0)
+
     def _on_open_folder(self, f_key: str):
         """
         打开文件夹回调
@@ -162,10 +182,11 @@ class PowerKey:
         print("  Fx + Enter    - 打开对应文件夹")
         print("  Fx + 字母/数字 - 启动对应快捷方式")
         print("  Win + Esc     - 切换游戏模式")
+        print("  Win + F3      - 切换托盘图标显示/隐藏")
         print("  Win + F4      - 退出程序")
         print()
-        print("常用功能键直接放行（F2重命名、F4关闭、F5刷新、F11全屏、F12控制台）")
-        print("不常用功能键会被拦截用于启动快捷方式（F1/F3/F6-F10）")
+        print("常用功能键直接放行（F2重命名、F3搜索、F4关闭、F5刷新、F11全屏、F12控制台）")
+        print("不常用功能键会被拦截用于启动快捷方式（F1/F6-F10）")
         print("注意: Fn+Fx 组合键不受影响")
         print()
         print("右键点击系统托盘图标可以退出程序、设置开机自启动或隐藏托盘")

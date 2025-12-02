@@ -1,5 +1,6 @@
 from functools import partial
 import time
+import threading
 import keyboard
 from typing import Callable, Dict, List, Optional
 from config import F_KEYS, TRIGGER_KEYS, GAME_MODE_HOTKEY, COMMON_F_KEYS
@@ -24,6 +25,9 @@ if len(HOTKEY_PARTS) != 2:
     raise ValueError('GAME_MODE_HOTKEY 必须形如 "win+esc"')
 GAME_MODE_MODIFIER_KEY, GAME_MODE_TRIGGER_KEY = HOTKEY_PARTS
 
+# 心跳检测间隔（秒）
+HEARTBEAT_INTERVAL = 300  # 5分钟检查一次
+
 
 class KeyboardHandler:
     """键盘事件处理器"""
@@ -38,13 +42,21 @@ class KeyboardHandler:
         self.on_launch_shortcut: Optional[Callable[[str, str], None]] = None
         self.on_game_mode_toggle: Optional[Callable[[bool], None]] = None
         self.on_exit: Optional[Callable[[], None]] = None  # 退出程序回调
+        self.on_toggle_tray: Optional[Callable[[], None]] = None  # 切换托盘显示回调
 
         # hook/热键句柄
         self.f_key_handlers: Dict[str, Callable] = {}
         self.shortcut_hotkeys: List[int] = []
         self.toggle_hook = None
         self.exit_hook = None  # Win+F4 退出 hook
+        self.tray_toggle_hook = None  # Win+F3 切换托盘 hook
         self.last_exit_time: float = 0.0  # 防止重复触发
+        self.last_tray_toggle_time: float = 0.0  # 防止重复触发托盘切换
+
+        # 心跳检测
+        self.last_activity_time: float = time.time()  # 最后一次活动时间
+        self.heartbeat_thread: Optional[threading.Thread] = None
+        self.running: bool = False
 
     def set_callbacks(
         self,
@@ -52,12 +64,14 @@ class KeyboardHandler:
         on_launch_shortcut: Callable[[str, str], None],
         on_game_mode_toggle: Callable[[bool], None],
         on_exit: Optional[Callable[[], None]] = None,
+        on_toggle_tray: Optional[Callable[[], None]] = None,
     ):
         """设置回调函数"""
         self.on_open_folder = on_open_folder
         self.on_launch_shortcut = on_launch_shortcut
         self.on_game_mode_toggle = on_game_mode_toggle
         self.on_exit = on_exit
+        self.on_toggle_tray = on_toggle_tray
 
     # region 注册/注销
 
@@ -143,6 +157,34 @@ class KeyboardHandler:
             keyboard.unhook(self.exit_hook)
             self.exit_hook = None
 
+    def _register_tray_toggle_hotkey(self):
+        """注册 Win+F3 切换托盘快捷键（不阻拦 Win 键）"""
+        if self.tray_toggle_hook is None:
+            self.tray_toggle_hook = keyboard.on_press_key(
+                'f3',
+                self._handle_tray_toggle_trigger,
+                suppress=False,
+            )
+
+    def _unregister_tray_toggle_hotkey(self):
+        """注销 Win+F3 切换托盘快捷键"""
+        if self.tray_toggle_hook is not None:
+            keyboard.unhook(self.tray_toggle_hook)
+            self.tray_toggle_hook = None
+
+    def _handle_tray_toggle_trigger(self, event):
+        """处理切换托盘快捷键触发"""
+        if not self._is_windows_pressed():
+            return
+
+        current = time.time()
+        if current - self.last_tray_toggle_time < 0.3:
+            return
+        self.last_tray_toggle_time = current
+
+        if self.on_toggle_tray:
+            self.on_toggle_tray()
+
     def _handle_exit_trigger(self, event):
         """处理退出快捷键触发"""
         if not self._is_windows_pressed():
@@ -153,7 +195,6 @@ class KeyboardHandler:
             return
         self.last_exit_time = current
 
-        print("\n检测到 Win+F4，正在退出程序...")
         if self.on_exit:
             self.on_exit()
 
@@ -166,12 +207,14 @@ class KeyboardHandler:
         if current - self.last_toggle_time < 0.3:
             return
         self.last_toggle_time = current
+        self.last_activity_time = current  # 更新活动时间
         self._toggle_game_mode()
 
     def _handle_open_folder_combo(self, f_key: str):
         """处理 Fx + Enter"""
         if self.game_mode:
             return
+        self.last_activity_time = time.time()  # 更新活动时间
         if self.on_open_folder:
             self.on_open_folder(f_key)
 
@@ -179,6 +222,7 @@ class KeyboardHandler:
         """处理 Fx + 字母/数字"""
         if self.game_mode:
             return
+        self.last_activity_time = time.time()  # 更新活动时间
         if self.on_launch_shortcut:
             self.on_launch_shortcut(f_key, trigger)
 
@@ -236,17 +280,59 @@ class KeyboardHandler:
         if self.on_game_mode_toggle:
             self.on_game_mode_toggle(self.game_mode)
 
+    def _heartbeat_check(self):
+        """心跳检测线程 - 定期静默刷新 hook（无日志输出）"""
+        while self.running:
+            try:
+                time.sleep(HEARTBEAT_INTERVAL)
+
+                if not self.running:
+                    break
+
+                # 静默重新注册所有 hook（防止失效）
+                if not self.game_mode:
+                    self._unregister_f_key_hooks()
+                    self._unregister_shortcut_hotkeys()
+                    time.sleep(0.1)
+                    self._register_f_key_hooks()
+                    self._register_shortcut_hotkeys()
+
+                # 重新注册游戏模式切换和退出热键
+                self._unregister_toggle_hotkey()
+                self._unregister_exit_hotkey()
+                self._unregister_tray_toggle_hotkey()
+                time.sleep(0.1)
+                self._register_toggle_hotkey()
+                self._register_exit_hotkey()
+                self._register_tray_toggle_hotkey()
+
+            except Exception:
+                # 静默处理异常，不输出
+                pass
+
     def start(self):
         """开始监听键盘事件"""
+        self.running = True
         self._register_f_key_hooks()
         self._register_shortcut_hotkeys()
         self._register_toggle_hotkey()
         self._register_exit_hotkey()
+        self._register_tray_toggle_hotkey()
+
+        # 启动心跳检测线程（静默运行）
+        self.heartbeat_thread = threading.Thread(target=self._heartbeat_check, daemon=True)
+        self.heartbeat_thread.start()
 
     def stop(self):
         """停止监听键盘事件"""
+        self.running = False
+        self._unregister_tray_toggle_hotkey()
         self._unregister_exit_hotkey()
         self._unregister_toggle_hotkey()
         self._unregister_shortcut_hotkeys()
         self._unregister_f_key_hooks()
+
+        # 等待心跳线程结束
+        if self.heartbeat_thread and self.heartbeat_thread.is_alive():
+            self.heartbeat_thread.join(timeout=1)
 
